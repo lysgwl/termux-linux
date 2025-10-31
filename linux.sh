@@ -37,7 +37,7 @@ LINUX_ARCH_NAME=""
 LINUX_VER_ARRAY=(ubuntu debian kali fedora)
 
 # linux操作数组
-LINUX_CMD_ARRAY=(安装-install 卸载-uninstall 配置-configure)
+LINUX_CMD_ARRAY=(安装-install 卸载-uninstall)
 
 ###############################################################################
 # 用户交互模块
@@ -157,7 +157,16 @@ show_cmd_menu()
 	local version=$1
 	local -n cmd_array_ref=$2
 	
-	printf "\033[1;33m%s\033[0m\n" "请选择命令序号($version):"
+	local version_path="$LINUX_ROOTFS_DIR/$version"
+	printf "\033[1;33m%s\033[0m" "请选择命令序号"
+	
+	# 检查系统是否已安装并显示状态
+	if [[ -d "$version_path" && -n "$(ls -A "$version_path" 2>/dev/null)" ]]; then
+		printf "(\033[1;32m%s 已安装\033[0m):\n" "$version"
+	else
+		printf "(\033[1;31m%s 未安装\033[0m):\n" "$version"
+	fi
+	
 	printf "\033[1;31m%2d. %s\033[0m\n" 0 "返回"
 	
 	for ((i=0; i<${#cmd_array_ref[@]}; i++)); do
@@ -177,8 +186,18 @@ show_linux_menu()
 	printf "\033[1;31m%2d. %s\033[0m\n" "0" "关闭"
 	
 	for ((i=0; i<${#linux_array_ref[@]}; i++)) do
-		printf "\033[1;36m%2d. %s\033[0m\n" $((i+1)) "${linux_array_ref[i]}"
+		local version_name="${linux_array_ref[i]}"
+		local version_path="$LINUX_ROOTFS_DIR/$version_name"
+		
+		# 检查系统是否已安装
+		if [[ -d "$version_path" && -n "$(ls -A "$version_path" 2>/dev/null)" ]]; then
+			printf "\033[1;36m%2d. %s \033[1;32m✓\033[0m\n" $((i+1)) "$version_name"
+		else
+			printf "\033[1;36m%2d. %s \033[1;31m✗\033[0m\n" $((i+1)) "$version_name"
+		fi
 	done
+	
+	printf "\n\033[1;33m状态说明: \033[1;32m✓ 已安装 \033[1;31m✗ 未安装\033[0m\n"
 }
 
 ###############################################################################
@@ -355,6 +374,38 @@ SCRIPT_EOF
 	chmod +x "$verStartFile"
 	print_log "INFO" "启动脚本生成完成: $verStartFile" >&2
 	return 0
+}
+
+# 设置linux系统配置
+set_linux_conf()
+{
+	local version="$1"
+	local version_path="$2"
+	
+	print_log "INFO" "正在配置 ${version} 根文件系统"
+	
+	if [[ ! -d "$version_path" && -z "$(ls -A "$version_path" 2>/dev/null)" ]]; then
+		print_log "ERROR" "${version} 系统目录不存在, 请检查!" >&2
+		return 1
+	fi
+	
+	# 执行各个配置函数
+	local config_functions=(
+		"set_dns_conf"
+		"set_timezone_conf" 
+		"set_stubs_conf"
+		"generate_startup_script"
+	)
+	
+	for func in "${config_functions[@]}"; do
+		if ! $func "$version" "$version_path"; then
+			print_log "ERROR" "配置函数执行失败: $func" >&2
+			return 2
+		fi
+	done
+	
+	print_log "INFO" "成功配置 ${version} 根文件系统!" >&2
+	return 0;
 }
 
 # 提取文件扩展名
@@ -632,7 +683,12 @@ init_linux()
 	
 	if ! proot --link2symlink tar -xf "$filepath" -C "$version_path" --exclude='dev'; then
 		print_log "ERROR" "解压 ${version} 根文件系统失败，请检查!"
-		return 1
+		return 4
+	fi
+	
+	if ! set_linux_conf "$version" "$version_path"; then
+		print_log "ERROR" "配置 ${version} 根文件系统失败，请检查!"
+		return 5
 	fi
 	
 	print_log "INFO" "成功安装 ${version} 根文件系统"
@@ -661,37 +717,6 @@ destroy_linux()
 	return 0;
 }
 
-# 配置已安装的Linux系统
-config_linux()
-{
-	local version="$1"
-	print_log "INFO" "正在配置 ${version} 根文件系统, 请稍候..."
-	
-	local version_path="$LINUX_ROOTFS_DIR/$version"
-	if [[ ! -d "$version_path" && -z "$(ls -A "$version_path" 2>/dev/null)" ]]; then
-		print_log "ERROR" "${version} 系统目录不存在, 请检查!" >&2
-		return 1
-	fi
-	
-	# 执行各个配置函数
-	local config_functions=(
-		"set_dns_conf"
-		"set_timezone_conf" 
-		"set_stubs_conf"
-		"generate_startup_script"
-	)
-	
-	for func in "${config_functions[@]}"; do
-		if ! $func "$version" "$version_path"; then
-			print_log "ERROR" "配置函数执行失败: $func" >&2
-			return 2
-		fi
-	done
-	
-	print_log "INFO" "成功配置 ${version} 根文件系统!" >&2
-	return 0;
-}
-
 # 执行Linux系统管理命令
 exe_cmd_shell()
 {
@@ -703,7 +728,6 @@ exe_cmd_shell()
 	case ${cmd} in
 	install) init_linux "$version"; ret=$? ;;
 	uninstall) destroy_linux "$version"; ret=$? ;;
-	configure) config_linux "$version"; ret=$? ;;
 	*) 
 		print_log "ERROR""无效命令:$cmd" >&2
 		return 1
