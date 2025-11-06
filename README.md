@@ -1,1 +1,2 @@
 # termux_linux
+termux环境下模拟创建完整的linux运行环境
